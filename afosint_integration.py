@@ -109,5 +109,19 @@ def afosint_risk_points(afosint_result: dict[str, Any] | None) -> tuple[int, lis
     if green_flags:
         notes.append(f"AFOSINT green flags: {', '.join(str(flag) for flag in green_flags[:2])}.")
 
+    domain_info = afosint_result.get("domain_info", {}) or {}
+    domain_status_text = str(domain_info.get("company_domain_status", "")).lower()
+    if "privacy" in domain_status_text or "protected" in domain_status_text or "unknown" in domain_status_text:
+        notes.append("WHOIS appears privacy-protected/incomplete; treated as uncertainty signal, not direct fraud proof.")
+        tags.append("WHOIS_LIMITED")
+        points = max(0, points - 5)
+
+    ip_checks = afosint_result.get("ip_checks", []) or []
+    if ip_checks:
+        mismatch_count = sum(1 for item in ip_checks if item.get("location_matches") is False)
+        if mismatch_count > 0:
+            notes.append("IP geolocation mismatch detected; interpreted cautiously due to provider accuracy variance.")
+            tags.append("IP_GEO_UNCERTAIN")
+
     notes.append(f"AFOSINT overall risk score={risk_score}/100, level={risk_level or 'UNKNOWN'}.")
     return points, notes, tags

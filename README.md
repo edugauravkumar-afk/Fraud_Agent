@@ -111,3 +111,21 @@ python3 fraud_review_engine.py --input sample_account_summary.json --use-afosint
 - If local vs network clock difference is greater than 1 hour, force location/proxy mismatch flag.
 - If Item URL is missing, approval is blocked and verdict becomes:
 	- `Conditional Approval - Hold for URL Verification`
+
+### Fraud-Specific OSINT Reliability Controls
+
+The engine explicitly handles common OSINT limitations so noisy signals do not create false positives:
+
+- WHOIS data incomplete/privacy-protected:
+	- Treated as uncertainty, not direct fraud proof.
+	- AFOSINT scoring is softened when WHOIS status is unknown/protected.
+- Web scraping depends on website structure:
+	- Marks low-text pages as `scraping-limited`.
+	- Avoids overconfident decisions from partial extraction.
+- IP geolocation accuracy varies by provider:
+	- IP mismatches are flagged but interpreted cautiously.
+- Rate limits on external services:
+	- HTTP `429` is detected as `rate-limited` and degrades confidence instead of forcing rejection.
+- Dynamic JavaScript-rendered pages:
+	- Script-heavy/low-visible-text pages are marked as dynamic content likely.
+	- Positive approvals are downgraded to VIP/manual when uncertainty is high.

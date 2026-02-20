@@ -152,26 +152,43 @@ def inspect_url(url: str, timeout: int = 6) -> dict[str, Any]:
     result: dict[str, Any] = {
         "url": url,
         "reachable": False,
+        "status_code": None,
         "final_url": None,
         "title": "",
         "parked": False,
         "safe_page_template": False,
         "bait_switch": False,
+        "rate_limited": False,
+        "dynamic_content_likely": False,
+        "scraping_limited": False,
         "error": None,
     }
     try:
         response = requests.get(url, timeout=timeout, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+        result["status_code"] = response.status_code
+        if response.status_code == 429:
+            result["rate_limited"] = True
+            result["error"] = "Rate limit encountered (HTTP 429)"
+            return result
+
         body = response.text[:25000].lower()
         soup = BeautifulSoup(response.text, "html.parser")
         title = soup.title.get_text(strip=True).lower() if soup.title else ""
         start_domain = urlparse(url).netloc.replace("www.", "")
         end_domain = urlparse(response.url).netloc.replace("www.", "")
+        visible_text = " ".join(soup.stripped_strings)[:25000].lower()
+        script_tags = len(soup.find_all("script"))
+        body_len = len(body)
+        text_len = len(visible_text)
+        result["dynamic_content_likely"] = script_tags >= 8 and text_len < 400 and body_len > 3000
+        result["scraping_limited"] = text_len < 120
 
         result["reachable"] = response.status_code < 500
         result["final_url"] = response.url
         result["title"] = title
         result["parked"] = any(key in body or key in title for key in PARKED_KEYWORDS)
-        result["safe_page_template"] = sum(1 for key in SAFE_PAGE_PATTERNS if key in body) >= 2
+        safe_source = visible_text if visible_text else body
+        result["safe_page_template"] = sum(1 for key in SAFE_PAGE_PATTERNS if key in safe_source) >= 2
         result["bait_switch"] = start_domain != end_domain and end_domain != ""
     except Exception as exc:
         result["error"] = str(exc)
@@ -305,6 +322,9 @@ def review_account(
     parked_hits = sum(1 for item in url_findings if item.get("parked"))
     safe_page_hits = sum(1 for item in url_findings if item.get("safe_page_template"))
     bait_hits = sum(1 for item in url_findings if item.get("bait_switch"))
+    rate_limited_hits = sum(1 for item in url_findings if item.get("rate_limited"))
+    dynamic_hits = sum(1 for item in url_findings if item.get("dynamic_content_likely"))
+    scraping_limited_hits = sum(1 for item in url_findings if item.get("scraping_limited"))
 
     if parked_hits > 0:
         risk_score += 25
@@ -315,6 +335,17 @@ def review_account(
     if bait_hits > 0:
         risk_score += 25
         reasons.append("Domain bait-and-switch/redirect mismatch detected.")
+
+    uncertainty_signals = 0
+    if rate_limited_hits > 0:
+        uncertainty_signals += 1
+        reasons.append("External URL intelligence encountered API/site rate limits; content confidence reduced.")
+    if dynamic_hits > 0:
+        uncertainty_signals += 1
+        reasons.append("Dynamic JavaScript-rendered pages detected; static scraping may miss true content.")
+    if scraping_limited_hits > 0:
+        uncertainty_signals += 1
+        reasons.append("Website structure yielded low extractable content; scraping evidence is partial.")
 
     if parked_hits == 0 and safe_page_hits == 0 and bait_hits == 0 and account.item_urls:
         positive_signals += 1
@@ -360,6 +391,9 @@ def review_account(
     if missing_urls:
         reasons.append("Item URL is missing; account cannot be fully approved before landing-page verification.")
 
+    if uncertainty_signals > 0 and risk_score < 70:
+        reasons.append("Uncertainty signals present; avoid hard decision from incomplete OSINT and escalate to manual/VIP when needed.")
+
     hard_reject = (not natural_offset_diff and not outsourced_exemption and shell_hit) or (parked_hits > 0 and bait_hits > 0)
 
     if hard_reject or risk_score >= 70:
@@ -376,6 +410,10 @@ def review_account(
         verdict = "Conditional Approval - Hold for URL Verification"
         status_tag = "HOLD_URL_VERIFICATION"
 
+    if uncertainty_signals > 0 and verdict == "Approve":
+        verdict = "Route to Human VIP Sales"
+        status_tag = "VIP_REVIEW"
+
     timezone_geo = (
         f"Local Browser Time: {account.local_time}; Network IP Time: {account.network_time}. "
         f"Calculation: |clock delta|={clock_diff_minutes} min, |offset delta|={offset_diff_minutes} min. "
@@ -390,6 +428,7 @@ def review_account(
 
     domain_policy = (
         f"URL provided={'yes' if not missing_urls else 'no'}; URL checks: parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}. "
+        f"Limitations: rate-limited={rate_limited_hits}, dynamic-content={dynamic_hits}, scraping-limited={scraping_limited_hits}. "
         f"{afosint_summary} Total risk score={risk_score}, positive signals={positive_signals}."
     )
 
@@ -411,6 +450,8 @@ def review_account(
     content = "CLOAKING_RISK" if (parked_hits or bait_hits or safe_page_hits) else "CLEAN_CONTENT"
     if missing_urls:
         content = "URL_MISSING"
+    elif uncertainty_signals > 0:
+        content = "CONTENT_UNCERTAIN"
 
     tags = [status_tag, risk_type, location, content]
     for af_tag in afosint_extra_tags:
@@ -430,6 +471,7 @@ def review_account(
         "debug": {
             "risk_score": risk_score,
             "positive_signals": positive_signals,
+            "uncertainty_signals": uncertainty_signals,
             "reasons": reasons,
             "url_findings": url_findings,
             "afosint": afosint_debug,
