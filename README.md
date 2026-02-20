@@ -244,6 +244,16 @@ QA alignment runs automatically on every push/PR via:
 - If local vs network clock difference is greater than 1 hour, force location/proxy mismatch flag.
 - If Item URL is missing, approval is blocked and verdict becomes:
 	- `Conditional Approval - Hold for URL Verification`
+- If URL resolves to dead HTTP status (`4xx/5xx`), account is treated as high-risk and cannot be approved.
+
+Additional decision signals integrated:
+
+- `cc_type` weighting:
+	- `credit` lowers risk slightly (stronger KYC profile)
+	- `debit/prepaid` increases risk
+- Landing-page thematic mismatch detection:
+	- URL intent (e.g., investment) vs page content intent (e.g., dating/scholarship)
+	- mismatch contributes cloaking/bait-switch risk
 
 ### Fraud-Specific OSINT Reliability Controls
 

@@ -41,6 +41,9 @@ PARKED_KEYWORDS = [
     "domain for sale",
     "buy this domain",
     "this domain is parked",
+    "premium domain",
+    "domain broker",
+    "broker",
     "sedo",
     "afternic",
 ]
@@ -52,6 +55,12 @@ SAFE_PAGE_PATTERNS = [
     "stock photo",
     "our mission is to empower",
 ]
+
+THEMATIC_KEYWORDS = {
+    "investment": ["investment", "crypto", "forex", "loan", "trading"],
+    "dating": ["dating", "match", "singles", "romance", "adult"],
+    "scholarship": ["scholarship", "grant", "university", "campus", "student aid"],
+}
 
 
 @dataclass
@@ -70,6 +79,7 @@ class AccountSummary:
     email_first_seen: str | None = None
     email_invalid_flag: bool = False
     network_country: str | None = None
+    cc_type: str = ""
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "AccountSummary":
@@ -80,6 +90,7 @@ class AccountSummary:
             company_name=data.get("company_name", "").strip(),
             cc_owner=data.get("cc_owner", "").strip(),
             cc_country=data.get("cc_country", "").strip(),
+            cc_type=data.get("cc_type", data.get("card_type", "")).strip().lower(),
             address=data.get("address", "").strip(),
             local_time=data.get("local_time", "").strip(),
             network_time=data.get("network_time", "").strip(),
@@ -178,6 +189,10 @@ def inspect_url(url: str, timeout: int = 6) -> dict[str, Any]:
             result["rate_limited"] = True
             result["error"] = "Rate limit encountered (HTTP 429)"
             return result
+        if response.status_code >= 400:
+            result["dead_url"] = True
+            result["error"] = f"HTTP {response.status_code}"
+            return result
 
         body = response.text[:25000].lower()
         soup = BeautifulSoup(response.text, "html.parser")
@@ -198,6 +213,20 @@ def inspect_url(url: str, timeout: int = 6) -> dict[str, Any]:
         safe_source = visible_text if visible_text else body
         result["safe_page_template"] = sum(1 for key in SAFE_PAGE_PATTERNS if key in safe_source) >= 2
         result["bait_switch"] = start_domain != end_domain and end_domain != ""
+
+        url_l = url.lower()
+        page_l = safe_source
+        url_theme = None
+        page_theme = None
+        for theme, keys in THEMATIC_KEYWORDS.items():
+            if any(key in url_l for key in keys):
+                url_theme = theme
+                break
+        for theme, keys in THEMATIC_KEYWORDS.items():
+            if any(key in page_l for key in keys):
+                page_theme = theme
+                break
+        result["thematic_mismatch"] = bool(url_theme and page_theme and url_theme != page_theme)
     except Exception as exc:
         result["error"] = str(exc)
 
@@ -319,6 +348,14 @@ def review_account(
         risk_score += 20
         reasons.append("Card owner not logically connected to applicant identity/company.")
 
+    cc_type = account.cc_type.lower().strip()
+    if cc_type == "credit":
+        risk_score -= 5
+        reasons.append("Credit card type provides stronger KYC confidence than debit/prepaid.")
+    elif cc_type in {"debit", "prepaid"}:
+        risk_score += 8
+        reasons.append("Debit/prepaid card type carries higher fraud risk than credit.")
+
     is_foreign_card = (
         account.network_country is not None
         and account.cc_country != ""
@@ -342,6 +379,8 @@ def review_account(
     parked_hits = sum(1 for item in url_findings if item.get("parked"))
     safe_page_hits = sum(1 for item in url_findings if item.get("safe_page_template"))
     bait_hits = sum(1 for item in url_findings if item.get("bait_switch"))
+    dead_url_hits = sum(1 for item in url_findings if item.get("dead_url"))
+    thematic_mismatch_hits = sum(1 for item in url_findings if item.get("thematic_mismatch"))
     rate_limited_hits = sum(1 for item in url_findings if item.get("rate_limited"))
     dynamic_hits = sum(1 for item in url_findings if item.get("dynamic_content_likely"))
     scraping_limited_hits = sum(1 for item in url_findings if item.get("scraping_limited"))
@@ -355,6 +394,12 @@ def review_account(
     if bait_hits > 0:
         risk_score += 25
         reasons.append("Domain bait-and-switch/redirect mismatch detected.")
+    if thematic_mismatch_hits > 0:
+        risk_score += 30
+        reasons.append("Landing-page thematic mismatch detected (possible cloaking bait-and-switch).")
+    if dead_url_hits > 0:
+        risk_score += 40
+        reasons.append("One or more URLs are dead/unreachable (HTTP 4xx/5xx).")
 
     uncertainty_signals = 0
     if rate_limited_hits > 0:
@@ -512,6 +557,12 @@ def review_account(
         reasons.append("Uncertainty signals present; avoid hard decision from incomplete OSINT and escalate to manual/VIP when needed.")
 
     hard_reject = (not natural_offset_diff and not outsourced_exemption and shell_hit) or (parked_hits > 0 and bait_hits > 0)
+    hard_reject = (
+        (not natural_offset_diff and not outsourced_exemption and shell_hit)
+        or (parked_hits > 0 and bait_hits > 0)
+        or (dead_url_hits > 0)
+        or (thematic_mismatch_hits > 0 and bait_hits > 0)
+    )
 
     if hard_reject or risk_score >= policy.reject_risk_threshold:
         verdict = "Reject"
@@ -563,7 +614,7 @@ def review_account(
     )
 
     domain_policy = (
-        f"URL provided={'yes' if not missing_urls else 'no'}; URL checks: parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}. "
+        f"URL provided={'yes' if not missing_urls else 'no'}; URL checks: dead={dead_url_hits}, parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}, thematic-mismatch={thematic_mismatch_hits}. "
         f"Limitations: rate-limited={rate_limited_hits}, dynamic-content={dynamic_hits}, scraping-limited={scraping_limited_hits}. "
         f"{afosint_summary} {advanced_summary} {learning_summary} Total risk score={risk_score}, positive signals={positive_signals}."
     )
@@ -589,8 +640,12 @@ def review_account(
         reject_factors.append("known shell address combined with foreign card profile")
     if parked_hits > 0:
         reject_factors.append("parked-domain behavior detected")
+    if dead_url_hits > 0:
+        reject_factors.append("landing URL is dead/unreachable")
     if bait_hits > 0:
         reject_factors.append("bait-and-switch redirect behavior detected")
+    if thematic_mismatch_hits > 0:
+        reject_factors.append("URL theme does not match page content theme (cloaking pattern)")
     if missing_urls:
         reject_factors.append("item URL missing so compliance destination cannot be verified")
 
