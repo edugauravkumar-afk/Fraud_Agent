@@ -22,3 +22,49 @@ Use the full operating prompt in:
 ## Goal
 
 Maximize legitimate approvals while minimizing fraud losses and avoiding false positives.
+
+## Manual Review Decision Engine (ML Band 30-85)
+
+This repo now includes a Python decision engine for the critical manual-review range:
+
+- `ML < 30` => Auto Approve
+- `ML > 85` => Auto Reject
+- `30 <= ML <= 85` => Deep contextual analysis with false-positive exemptions
+
+### Files
+
+- `fraud_review_engine.py` - main decision engine + strict report formatter
+- `sample_account_summary.json` - sample account payload
+- `requirements.txt` - required Python packages
+
+### Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+### Run
+
+```bash
+python3 fraud_review_engine.py --input sample_account_summary.json
+```
+
+Optional (skip live URL fetch checks):
+
+```bash
+python3 fraud_review_engine.py --input sample_account_summary.json --no-web-checks
+```
+
+Raw JSON output:
+
+```bash
+python3 fraud_review_engine.py --input sample_account_summary.json --json
+```
+
+### Why this helps
+
+- Adds structured checks for timezone/GEO, email trust, identity-payment linkage, and content-cloaking patterns.
+- Explicitly enforces false-positive exemptions (outsourced agencies, enterprise domains, family/corporate cards).
+- Produces consistent analyst-ready output for CRM logging and audits.
