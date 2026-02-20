@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
 import requests
@@ -24,6 +25,7 @@ SHELL_ADDRESSES = {
 }
 
 OUTSOURCED_NETWORK_OFFSETS_MINUTES = {330, 420, 480}
+KR_OUTSOURCED_CLOCK_DIFF_MINUTES = {210, 330}
 FREE_EMAIL_PROVIDERS = {
     "gmail.com",
     "yahoo.com",
@@ -36,6 +38,23 @@ FREE_EMAIL_PROVIDERS = {
     "tutanota.com",
 }
 ENCRYPTED_EMAIL_PROVIDERS = {"protonmail.com", "pm.me", "tutanota.com"}
+KR_CARD_ISSUER_KEYWORDS = {
+    "카드",
+    "lotte card",
+    "롯데카드",
+    "shinhan card",
+    "신한카드",
+    "kb card",
+    "국민카드",
+    "hana card",
+    "하나카드",
+    "hyundai card",
+    "현대카드",
+    "woori card",
+    "우리카드",
+    "samsung card",
+    "삼성카드",
+}
 
 PARKED_KEYWORDS = [
     "domain for sale",
@@ -56,11 +75,26 @@ SAFE_PAGE_PATTERNS = [
     "our mission is to empower",
 ]
 
+MAINTENANCE_KEYWORDS = [
+    "under maintenance",
+    "coming soon",
+    "currently working hard",
+    "website is under maintenance",
+]
+
 THEMATIC_KEYWORDS = {
     "investment": ["investment", "crypto", "forex", "loan", "trading"],
     "dating": ["dating", "match", "singles", "romance", "adult"],
     "scholarship": ["scholarship", "grant", "university", "campus", "student aid"],
 }
+
+NICKNAME_EQUIVALENTS = [
+    {"william", "bill", "billy", "will"},
+    {"jon", "john", "jonathan"},
+    {"olga", "olha"},
+]
+
+TIER1_CARD_NETWORKS = {"visa", "mastercard", "american_express", "amex"}
 
 
 @dataclass
@@ -77,9 +111,12 @@ class AccountSummary:
     item_urls: list[str] = field(default_factory=list)
     ip_addresses: list[dict[str, str]] = field(default_factory=list)
     email_first_seen: str | None = None
+    email_age_score: int | None = None
     email_invalid_flag: bool = False
     network_country: str | None = None
     cc_type: str = ""
+    cc_network: str = ""
+    legal_director_verified: bool = False
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "AccountSummary":
@@ -91,14 +128,32 @@ class AccountSummary:
             cc_owner=data.get("cc_owner", "").strip(),
             cc_country=data.get("cc_country", "").strip(),
             cc_type=data.get("cc_type", data.get("card_type", "")).strip().lower(),
+            cc_network=(
+                data.get("cc_network")
+                or data.get("card_network")
+                or data.get("cc_brand")
+                or data.get("card_brand")
+                or data.get("payment_network")
+                or ""
+            ).strip().lower(),
             address=data.get("address", "").strip(),
             local_time=data.get("local_time", "").strip(),
             network_time=data.get("network_time", "").strip(),
             item_urls=data.get("item_urls", []) or [],
             ip_addresses=data.get("ip_addresses", []) or [],
             email_first_seen=data.get("email_first_seen"),
+            email_age_score=(
+                int(data["email_age_score"])
+                if data.get("email_age_score") is not None
+                else (int(data["emailage_score"]) if data.get("emailage_score") is not None else None)
+            ),
             email_invalid_flag=bool(data.get("email_invalid_flag", False)),
             network_country=data.get("network_country"),
+            legal_director_verified=bool(
+                data.get("legal_director_verified")
+                or data.get("public_registry_verified")
+                or data.get("director_verified")
+            ),
         )
 
 
@@ -127,6 +182,54 @@ def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
 
 
+def normalize_person_name(value: str) -> str:
+    cleaned = normalize_text(value)
+    cleaned = (
+        cleaned.replace("kh", "h")
+        .replace("ph", "f")
+        .replace("iy", "i")
+    )
+    cleaned = re.sub(r"[^a-z\s]", " ", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def token_in_same_nickname_group(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    for group in NICKNAME_EQUIVALENTS:
+        if a in group and b in group:
+            return True
+    return False
+
+
+def evaluate_identity_name_match(account_name: str, cc_owner: str) -> str:
+    account_norm = normalize_person_name(account_name)
+    owner_norm = normalize_person_name(cc_owner)
+    if not account_norm or not owner_norm:
+        return "mismatch"
+    if account_norm == owner_norm:
+        return "exact"
+
+    account_tokens = [tok for tok in account_norm.split(" ") if tok]
+    owner_tokens = [tok for tok in owner_norm.split(" ") if tok]
+    if not account_tokens or not owner_tokens:
+        return "mismatch"
+
+    first_similar = token_in_same_nickname_group(account_tokens[0], owner_tokens[0]) or (
+        SequenceMatcher(None, account_tokens[0], owner_tokens[0]).ratio() >= 0.78
+    )
+    account_last = account_tokens[-1]
+    owner_last = owner_tokens[-1]
+    last_similar = token_in_same_nickname_group(account_last, owner_last) or (
+        SequenceMatcher(None, account_last, owner_last).ratio() >= 0.78
+    )
+
+    full_ratio = SequenceMatcher(None, account_norm, owner_norm).ratio()
+    if (first_similar and last_similar) or full_ratio >= 0.84:
+        return "fuzzy"
+    return "mismatch"
+
+
 def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
@@ -139,6 +242,41 @@ def is_gibberish_domain(domain: str) -> bool:
     return vowels <= 1 and any(ch.isdigit() for ch in root)
 
 
+def root_domain_from_url(url: str) -> str:
+    try:
+        netloc = urlparse(url).netloc.lower().replace("www.", "")
+        if not netloc:
+            return ""
+        parts = [part for part in netloc.split(".") if part]
+        if len(parts) >= 2:
+            return f"{parts[-2]}.{parts[-1]}"
+        return netloc
+    except Exception:
+        return ""
+
+
+def root_domain_from_email_domain(email_domain: str) -> str:
+    host = email_domain.strip().lower()
+    if not host:
+        return ""
+    parts = [part for part in host.split(".") if part]
+    if len(parts) >= 2:
+        return f"{parts[-2]}.{parts[-1]}"
+    return host
+
+
+def domains_look_coherent(domain_a: str, domain_b: str) -> bool:
+    a = domain_a.strip().lower()
+    b = domain_b.strip().lower()
+    if not a or not b:
+        return False
+    return a == b or a.endswith(f".{b}") or b.endswith(f".{a}")
+
+
+def is_tier1_card_network(network: str) -> bool:
+    return network.strip().lower() in TIER1_CARD_NETWORKS
+
+
 def looks_enterprise_domain(email_domain: str, company_name: str) -> bool:
     if email_domain in FREE_EMAIL_PROVIDERS:
         return False
@@ -146,6 +284,15 @@ def looks_enterprise_domain(email_domain: str, company_name: str) -> bool:
     if not company_tokens:
         return True
     return any(token in email_domain for token in company_tokens)
+
+
+def domain_matches_company(domain: str, company_name: str) -> bool:
+    if not domain:
+        return False
+    company_tokens = [t for t in re.findall(r"[a-z0-9]+", company_name.lower()) if len(t) > 2]
+    if not company_tokens:
+        return True
+    return any(token in domain for token in company_tokens)
 
 
 def is_western_business_profile(company_name: str, address: str, email_domain: str) -> bool:
@@ -167,6 +314,26 @@ def is_western_business_profile(company_name: str, address: str, email_domain: s
     return has_western_address and enterprise_domain
 
 
+def is_korean_profile(address: str, network_country: str | None, cc_country: str) -> bool:
+    address_l = address.lower()
+    cc_l = cc_country.lower()
+    network_l = (network_country or "").lower()
+    return (
+        "korea" in address_l
+        or "대한민국" in address
+        or "남양주" in address
+        or network_l == "kr"
+        or cc_l == "kr"
+    )
+
+
+def is_korean_card_issuer_owner(cc_owner: str) -> bool:
+    owner_l = cc_owner.strip().lower()
+    if not owner_l:
+        return False
+    return any(keyword in owner_l for keyword in KR_CARD_ISSUER_KEYWORDS)
+
+
 def inspect_url(url: str, timeout: int = 6) -> dict[str, Any]:
     result: dict[str, Any] = {
         "url": url,
@@ -180,6 +347,7 @@ def inspect_url(url: str, timeout: int = 6) -> dict[str, Any]:
         "rate_limited": False,
         "dynamic_content_likely": False,
         "scraping_limited": False,
+        "maintenance_placeholder": False,
         "error": None,
     }
     try:
@@ -212,6 +380,7 @@ def inspect_url(url: str, timeout: int = 6) -> dict[str, Any]:
         result["parked"] = any(key in body or key in title for key in PARKED_KEYWORDS)
         safe_source = visible_text if visible_text else body
         result["safe_page_template"] = sum(1 for key in SAFE_PAGE_PATTERNS if key in safe_source) >= 2
+        result["maintenance_placeholder"] = any(keyword in safe_source for keyword in MAINTENANCE_KEYWORDS)
         result["bait_switch"] = start_domain != end_domain and end_domain != ""
 
         url_l = url.lower()
@@ -293,16 +462,24 @@ def review_account(
 
     email_domain = account.email.split("@")[-1] if "@" in account.email else ""
     natural_offset_diff = offset_diff_minutes % 30 == 0
+    korean_profile = is_korean_profile(account.address, account.network_country, account.cc_country)
+    kr_outsourced_exemption = korean_profile and clock_diff_minutes in KR_OUTSOURCED_CLOCK_DIFF_MINUTES
     outsourced_exemption = (
         network_offset in OUTSOURCED_NETWORK_OFFSETS_MINUTES
         and is_western_business_profile(account.company_name, account.address, email_domain)
     )
 
-    if clock_diff_minutes > policy.clock_mismatch_minutes_threshold:
+    if clock_diff_minutes > policy.clock_mismatch_minutes_threshold and not kr_outsourced_exemption:
         risk_score += 30
         reasons.append("Local vs network clock difference is greater than 1 hour (mandatory proxy/location mismatch flag).")
+    elif kr_outsourced_exemption:
+        positive_signals += 2
+        reasons.append("Clock mismatch fits KR outsourced-ops pattern (KST-managed account with offshore operator clock).")
 
-    if not natural_offset_diff and not outsourced_exemption:
+    if offset_diff_minutes >= policy.major_clock_gap_minutes_threshold and not outsourced_exemption and not kr_outsourced_exemption:
+        risk_score += 35
+        reasons.append("Large timezone offset gap indicates likely geo-spoofing/proxy usage.")
+    elif not natural_offset_diff and not outsourced_exemption and not kr_outsourced_exemption:
         risk_score += 35
         reasons.append("Chaotic timezone delta suggests anti-detect manipulation.")
     elif outsourced_exemption:
@@ -340,10 +517,22 @@ def review_account(
     card_last = last_name(account.cc_owner)
     last_name_match = user_last != "" and user_last == card_last
     card_company_match = normalize_text(account.cc_owner) == normalize_text(account.company_name)
+    identity_name_match_type = evaluate_identity_name_match(account.name, account.cc_owner)
 
-    if last_name_match or card_company_match:
+    issuer_owner_exemption = korean_profile and is_korean_card_issuer_owner(account.cc_owner)
+
+    if identity_name_match_type == "exact":
+        positive_signals += 2
+        reasons.append("Account name and card owner are exact match.")
+    elif last_name_match or card_company_match:
         positive_signals += 2
         reasons.append("Card ownership is logically connected (family/corporate pattern).")
+    elif issuer_owner_exemption:
+        positive_signals += 2
+        reasons.append("KR issuer-style card owner string detected; treated as regional corporate card format.")
+    elif identity_name_match_type == "fuzzy":
+        risk_score += 12
+        reasons.append("Fuzzy identity match detected (possible transliteration/typo); elevated scrutiny required.")
     else:
         risk_score += 20
         reasons.append("Card owner not logically connected to applicant identity/company.")
@@ -380,10 +569,39 @@ def review_account(
     safe_page_hits = sum(1 for item in url_findings if item.get("safe_page_template"))
     bait_hits = sum(1 for item in url_findings if item.get("bait_switch"))
     dead_url_hits = sum(1 for item in url_findings if item.get("dead_url"))
+    maintenance_hits = sum(1 for item in url_findings if item.get("maintenance_placeholder"))
     thematic_mismatch_hits = sum(1 for item in url_findings if item.get("thematic_mismatch"))
     rate_limited_hits = sum(1 for item in url_findings if item.get("rate_limited"))
     dynamic_hits = sum(1 for item in url_findings if item.get("dynamic_content_likely"))
     scraping_limited_hits = sum(1 for item in url_findings if item.get("scraping_limited"))
+    has_valid_url = any(
+        item.get("reachable")
+        and not item.get("dead_url")
+        and not item.get("parked")
+        and not item.get("bait_switch")
+        for item in url_findings
+    )
+    if not enable_web_checks and account.item_urls:
+        has_valid_url = True
+
+    first_item_domain = root_domain_from_url(account.item_urls[0]) if account.item_urls else ""
+    email_root_domain = root_domain_from_email_domain(email_domain)
+    email_url_domain_coherent = domains_look_coherent(email_root_domain, first_item_domain)
+    legal_director_override = (
+        account.legal_director_verified
+        and identity_name_match_type == "exact"
+        and is_tier1_card_network(account.cc_network)
+        and has_valid_url
+        and email_url_domain_coherent
+    )
+    if legal_director_override:
+        risk_score -= 35
+        positive_signals += 4
+        reasons.append(
+            "Verified legal-director ownership + tier-1 card + coherent domain/email allows controlled override for single noisy signals."
+        )
+        if first_seen_zero or account.email_invalid_flag:
+            reasons.append("Email validation anomaly overridden by stronger verified ownership and payment coherence.")
 
     if parked_hits > 0:
         risk_score += 25
@@ -400,6 +618,30 @@ def review_account(
     if dead_url_hits > 0:
         risk_score += 40
         reasons.append("One or more URLs are dead/unreachable (HTTP 4xx/5xx).")
+    if maintenance_hits > 0:
+        risk_score += policy.maintenance_page_risk_points
+        reasons.append("One or more URLs are maintenance/coming-soon placeholders without verifiable live operations.")
+
+    major_clock_gap = max(clock_diff_minutes, offset_diff_minutes) >= policy.major_clock_gap_minutes_threshold
+    if major_clock_gap and not outsourced_exemption and not kr_outsourced_exemption and not legal_director_override:
+        risk_score += 20
+        reasons.append("Major timezone gap (>=10h) indicates high-confidence environment masking.")
+
+    strict_identity_mismatch = not last_name_match and not card_company_match
+    if strict_identity_mismatch and major_clock_gap and not issuer_owner_exemption:
+        risk_score += 25
+        reasons.append("Identity/payment mismatch combined with major timezone gap forms coordinated fraud pattern.")
+
+    company_email_aligned = domain_matches_company(email_domain, account.company_name)
+    company_url_aligned = domain_matches_company(first_item_domain, account.company_name)
+    if not company_email_aligned and not legal_director_override:
+        risk_score += policy.domain_identity_mismatch_risk_points
+        reasons.append("Email domain does not align with claimed company identity.")
+    elif legal_director_override and not company_email_aligned:
+        reasons.append("Company-to-domain mismatch treated as acceptable parent/subsidiary structure after legal-director verification.")
+    if account.item_urls and not company_url_aligned and not legal_director_override:
+        risk_score += max(policy.domain_identity_mismatch_risk_points - 2, 6)
+        reasons.append("Primary destination domain does not align with claimed company identity.")
 
     uncertainty_signals = 0
     if rate_limited_hits > 0:
@@ -412,6 +654,22 @@ def review_account(
         uncertainty_signals += 1
         reasons.append("Website structure yielded low extractable content; scraping evidence is partial.")
 
+    base_learning_context: dict[str, Any] = {
+        "clock_diff_minutes": clock_diff_minutes,
+        "offset_diff_minutes": offset_diff_minutes,
+        "risk_score": risk_score,
+        "positive_signals": positive_signals,
+        "uncertainty_signals": uncertainty_signals,
+    }
+    base_learning_features = build_feature_dict(
+        {
+            "email": account.email,
+            "ml_score": account.ml_score,
+            "item_urls": account.item_urls,
+        },
+        base_learning_context,
+    )
+
     learning_summary = "Self-learning model not requested."
     learning_debug: dict[str, Any] = {
         "enabled": use_self_learning,
@@ -420,23 +678,11 @@ def review_account(
         "reject_probability": None,
         "risk_points_applied": 0,
         "error": None,
+        "features": base_learning_features,
+        "context": base_learning_context,
     }
     if use_self_learning:
-        learning_features = build_feature_dict(
-            {
-                "email": account.email,
-                "ml_score": account.ml_score,
-                "item_urls": account.item_urls,
-            },
-            {
-                "clock_diff_minutes": clock_diff_minutes,
-                "offset_diff_minutes": offset_diff_minutes,
-                "risk_score": risk_score,
-                "positive_signals": positive_signals,
-                "uncertainty_signals": uncertainty_signals,
-            },
-        )
-        learning_result = predict_reject_probability(self_learning_model_path, learning_features)
+        learning_result = predict_reject_probability(self_learning_model_path, base_learning_features)
         learning_debug["available"] = bool(learning_result.get("available"))
         learning_debug["reject_probability"] = learning_result.get("reject_probability")
         learning_debug["error"] = learning_result.get("error")
@@ -556,12 +802,37 @@ def review_account(
     if uncertainty_signals > 0 and risk_score < 70:
         reasons.append("Uncertainty signals present; avoid hard decision from incomplete OSINT and escalate to manual/VIP when needed.")
 
+    fuzzy_identity_hard_reject = (
+        identity_name_match_type == "fuzzy"
+        and (
+            missing_urls
+            or not has_valid_url
+            or (account.email_age_score is not None and account.email_age_score <= 3)
+        )
+    )
+    if fuzzy_identity_hard_reject:
+        reasons.append("Fuzzy identity plus missing/weak URL verification or zero-day email-age pattern => mandatory rejection.")
+
+    fuzzy_identity_manual_review = (
+        identity_name_match_type == "fuzzy"
+        and has_valid_url
+        and (account.email_age_score is None or account.email_age_score > 3)
+    )
+
     hard_reject = (not natural_offset_diff and not outsourced_exemption and shell_hit) or (parked_hits > 0 and bait_hits > 0)
     hard_reject = (
         (not natural_offset_diff and not outsourced_exemption and shell_hit)
         or (parked_hits > 0 and bait_hits > 0)
         or (dead_url_hits > 0)
         or (thematic_mismatch_hits > 0 and bait_hits > 0)
+        or (strict_identity_mismatch and major_clock_gap and not company_email_aligned and not legal_director_override)
+        or fuzzy_identity_hard_reject
+        or (
+            identity_name_match_type == "mismatch"
+            and not card_company_match
+            and not issuer_owner_exemption
+            and not legal_director_override
+        )
     )
 
     if hard_reject or risk_score >= policy.reject_risk_threshold:
@@ -577,6 +848,10 @@ def review_account(
     if missing_urls and verdict != "Reject":
         verdict = "Conditional Approval - Hold for URL Verification"
         status_tag = "HOLD_URL_VERIFICATION"
+
+    if fuzzy_identity_manual_review and verdict == "Approve":
+        verdict = "Route to Human VIP Sales"
+        status_tag = "VIP_REVIEW"
 
     if uncertainty_signals > 0 and verdict == "Approve":
         verdict = "Route to Human VIP Sales"
@@ -605,16 +880,17 @@ def review_account(
         f"Local Browser Time: {account.local_time}; Network IP Time: {account.network_time}. "
         f"Calculation: |clock delta|={clock_diff_minutes} min, |offset delta|={offset_diff_minutes} min. "
         f"Rule check (>{policy.clock_mismatch_minutes_threshold} min clock mismatch)={'flagged' if clock_diff_minutes > policy.clock_mismatch_minutes_threshold else 'clear'}. "
-        f"Natural offset delta={'yes' if natural_offset_diff else 'no'}; outsourced exemption={'yes' if outsourced_exemption else 'no'}."
+        f"Natural offset delta={'yes' if natural_offset_diff else 'no'}; outsourced exemption={'yes' if (outsourced_exemption or kr_outsourced_exemption) else 'no'}; KR profile={'yes' if korean_profile else 'no'}; legal-director override={'yes' if legal_director_override else 'no'}."
     )
 
     identity_payment = (
-        f"Name/card relation={'match' if (last_name_match or card_company_match) else 'mismatch'}; "
-        f"shell address={'yes' if shell_hit else 'no'}; foreign card risk={'yes' if is_foreign_card else 'no'}."
+        f"Name/card relation={identity_name_match_type}; "
+        f"shell address={'yes' if shell_hit else 'no'}; foreign card risk={'yes' if is_foreign_card else 'no'}; "
+        f"tier1 card network={'yes' if is_tier1_card_network(account.cc_network) else 'no'}; legal director verified={'yes' if account.legal_director_verified else 'no'}."
     )
 
     domain_policy = (
-        f"URL provided={'yes' if not missing_urls else 'no'}; URL checks: dead={dead_url_hits}, parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}, thematic-mismatch={thematic_mismatch_hits}. "
+        f"URL provided={'yes' if not missing_urls else 'no'}; URL checks: dead={dead_url_hits}, maintenance={maintenance_hits}, parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}, thematic-mismatch={thematic_mismatch_hits}. "
         f"Limitations: rate-limited={rate_limited_hits}, dynamic-content={dynamic_hits}, scraping-limited={scraping_limited_hits}. "
         f"{afosint_summary} {advanced_summary} {learning_summary} Total risk score={risk_score}, positive signals={positive_signals}."
     )
@@ -622,6 +898,10 @@ def review_account(
     approve_factors = []
     if last_name_match or card_company_match:
         approve_factors.append("identity and payment owner are logically linked")
+    elif identity_name_match_type == "fuzzy":
+        approve_factors.append("identity is fuzzy-matched and may reflect transliteration/typo")
+    if legal_director_override:
+        approve_factors.append("public registry/director verification supports ownership override")
     if not shell_hit:
         approve_factors.append("address does not match known shell-address patterns")
     if natural_offset_diff or outsourced_exemption:
@@ -634,14 +914,22 @@ def review_account(
         reject_factors.append(
             f"local vs network time mismatch exceeds {policy.clock_mismatch_minutes_threshold} minutes"
         )
-    if not natural_offset_diff and not outsourced_exemption:
+    if not natural_offset_diff and not outsourced_exemption and not kr_outsourced_exemption:
         reject_factors.append("chaotic timezone offset suggests spoofing")
+    if offset_diff_minutes >= policy.major_clock_gap_minutes_threshold and not outsourced_exemption and not kr_outsourced_exemption:
+        reject_factors.append("large timezone offset gap suggests geo-spoofing")
+    if identity_name_match_type == "mismatch" and not issuer_owner_exemption:
+        reject_factors.append("account name and card owner are completely mismatched")
+    if identity_name_match_type == "fuzzy" and fuzzy_identity_hard_reject:
+        reject_factors.append("fuzzy identity with weak URL/email trust triggers mandatory reject")
     if shell_hit and is_foreign_card:
         reject_factors.append("known shell address combined with foreign card profile")
     if parked_hits > 0:
         reject_factors.append("parked-domain behavior detected")
     if dead_url_hits > 0:
         reject_factors.append("landing URL is dead/unreachable")
+    if maintenance_hits > 0:
+        reject_factors.append("landing URL is only a maintenance/placeholder page")
     if bait_hits > 0:
         reject_factors.append("bait-and-switch redirect behavior detected")
     if thematic_mismatch_hits > 0:

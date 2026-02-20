@@ -206,6 +206,8 @@ The agent supports controlled self-learning from reviewed outcomes:
 python3 self_learning_pipeline.py add-feedback \
 	--account sample_account_summary.json \
 	--final-verdict "Route to Human VIP Sales" \
+	--source "analyst-review" \
+	--review-id "BS-1995001" \
 	--feedback-data data/review_feedback.jsonl
 ```
 
@@ -215,6 +217,15 @@ python3 self_learning_pipeline.py add-feedback \
 python3 self_learning_pipeline.py train \
 	--feedback-data data/review_feedback.jsonl \
 	--model-path models/self_learning_model.joblib
+```
+
+Optional auto-train (retrain only when enough new feedback accumulates):
+
+```bash
+python3 self_learning_pipeline.py auto-train \
+	--feedback-data data/review_feedback.jsonl \
+	--model-path models/self_learning_model.joblib \
+	--min-new-records 25
 ```
 
 3) Use model during review (conservative risk adjustment):
@@ -231,6 +242,8 @@ Safety design:
 
 - Hard guardrails (URL missing hold, shell/geo rules, thresholds) remain active.
 - Self-learning only adjusts risk score conservatively; it does not bypass mandatory checks.
+- Training now enforces minimum sample count and class balance to reduce overfitting.
+- Model artifacts store metadata (`trained_at`, class counts, feedback line count) for controlled retraining.
 
 ### CI Automation
 
@@ -254,6 +267,18 @@ Additional decision signals integrated:
 - Landing-page thematic mismatch detection:
 	- URL intent (e.g., investment) vs page content intent (e.g., dating/scholarship)
 	- mismatch contributes cloaking/bait-switch risk
+
+- Fuzzy identity validation (Account Name vs Card Owner):
+	- exact match => normal scoring
+	- complete mismatch => hard reject (unless explicit regional corporate-card exemption)
+	- fuzzy match (typo/transliteration/nickname, e.g. Olga/Olha, Jon/John):
+		- with missing/invalid URL or email-age score <= 3 => hard reject
+		- with valid URL and aged email => route to manual VIP review (never blind auto-approve)
+
+- Verified legal-director override:
+	- If `legal_director_verified=true` and account/card names exactly match and card network is tier-1 (`visa/mastercard/amex`) and URL/email domain are coherent,
+	- then a single noisy email-validation anomaly can be overridden conservatively,
+	- and parent/subsidiary company-vs-domain mismatch penalties are softened.
 
 ### Fraud-Specific OSINT Reliability Controls
 

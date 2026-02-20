@@ -1,0 +1,27 @@
+{
+  "name": "Guilhem Gobillion",
+  "email": "desk@tovastationery.com",
+  "ml_score": 50,
+  "company_name": "Markac & Partners GmbH",
+  "cc_owner": "Guilhem Gobillion",
+  "cc_country": "CH",
+  "cc_type": "credit",
+  "cc_network": "mastercard",
+  "address": "Kalkbreitestrasse 98. 8003. Zurich, CH",
+  "local_time": "2026-02-18T23:47:00+01:00",
+  "network_time": "2026-02-18T19:17:00+01:00",
+  "network_country": "CH",
+  "email_first_seen": "2025-07-09",
+  "email_age_score": 2,
+  "email_invalid_flag": true,
+  "legal_director_verified": true,
+  "item_urls": [
+    "https://tovastationery.com/"
+  ],
+  "ip_addresses": [
+    {
+      "ip": "203.0.113.92",
+      "country": "CH"
+    }
+  ]
+}

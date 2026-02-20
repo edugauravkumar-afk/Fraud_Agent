@@ -1,0 +1,23 @@
+{
+  "name": "Olga Kharchenko",
+  "email": "ntsaccont2@gmail.com",
+  "ml_score": 50,
+  "company_name": "neurolatte",
+  "cc_owner": "Olha Kharchenko",
+  "cc_country": "UA",
+  "cc_type": "credit",
+  "address": "khimikiv. 70000. Ivano_Frankivsk, UA",
+  "local_time": "2026-02-18T22:48:00+02:00",
+  "network_time": "2026-02-18T19:18:00+02:00",
+  "network_country": "UA",
+  "email_first_seen": "2026-02-18",
+  "email_age_score": 3,
+  "email_invalid_flag": false,
+  "item_urls": [],
+  "ip_addresses": [
+    {
+      "ip": "203.0.113.80",
+      "country": "UA"
+    }
+  ]
+}

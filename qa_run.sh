@@ -16,12 +16,24 @@ CASES=(
   "qa_case_midnight_boundary.json"
   "qa_case_url_missing_time_mismatch.json"
   "qa_case_outsourced_enterprise.json"
+  "qa_case_identity_geo_spoof_reject.json"
+  "qa_case_domain_mismatch_reject.json"
+  "qa_case_kr_outsourced_issuer_approve.json"
+  "qa_case_fuzzy_identity_missing_url_reject.json"
+  "qa_case_fuzzy_identity_valid_url_vip.json"
+  "qa_case_verified_director_override_approve.json"
 )
 
 EXPECTED=(
   "Approve"
   "Conditional Approval - Hold for URL Verification"
   "Route to Human VIP Sales"
+  "Reject"
+  "Reject"
+  "Approve"
+  "Reject"
+  "Route to Human VIP Sales"
+  "Approve"
 )
 
 TMP_DIR="$(mktemp -d)"

@@ -1,0 +1,25 @@
+{
+  "name": "Olga Kharchenko",
+  "email": "olga.kharchenko@neurolatte.com",
+  "ml_score": 50,
+  "company_name": "neurolatte",
+  "cc_owner": "Olha Kharchenko",
+  "cc_country": "UA",
+  "cc_type": "credit",
+  "address": "khimikiv. 70000. Ivano_Frankivsk, UA",
+  "local_time": "2026-02-18T22:48:00+02:00",
+  "network_time": "2026-02-18T22:51:00+02:00",
+  "network_country": "UA",
+  "email_first_seen": "2022-11-05",
+  "email_age_score": 6,
+  "email_invalid_flag": false,
+  "item_urls": [
+    "https://example.com/store"
+  ],
+  "ip_addresses": [
+    {
+      "ip": "203.0.113.81",
+      "country": "UA"
+    }
+  ]
+}
