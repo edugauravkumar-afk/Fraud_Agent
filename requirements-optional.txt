@@ -1,1 +1,2 @@
 afosint-toolkit
+python-whois

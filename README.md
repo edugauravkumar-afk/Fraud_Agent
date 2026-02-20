@@ -73,6 +73,14 @@ Install optional package(s):
 python -m pip install -r requirements-optional.txt
 ```
 
+Dependency coverage:
+
+- `requests` (HTTP requests) -> in `requirements.txt`
+- `beautifulsoup4` (HTML parsing) -> in `requirements.txt`
+- `python-whois` (WHOIS lookups) -> in `requirements-optional.txt`
+- `ipaddress` (IP validation) -> Python standard library (no pip install needed)
+- Python `3.6+` supported by dependency set
+
 Run with AFOSINT comprehensive check enabled:
 
 ```bash
