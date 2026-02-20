@@ -50,6 +50,11 @@ This repo now includes a Python decision engine for the critical manual-review r
 
 - `fraud_review_engine.py` - main decision engine + strict report formatter
 - `afosint_integration.py` - optional AFOSINT adapter with graceful fallback
+- `advanced_external_checks.py` - optional advanced external intelligence checks
+- `policy_config.py` - policy thresholds loader
+- `fraud_policy.json` - default policy thresholds
+- `batch_review.py` - batch queue generator for multi-account review
+- `.env.example` - external API configuration template
 - `sample_account_summary.json` - sample account payload
 - `requirements.txt` - required Python packages
 - `requirements-optional.txt` - optional AFOSINT package list
@@ -65,7 +70,7 @@ python -m pip install -r requirements.txt
 ### Run
 
 ```bash
-python3 fraud_review_engine.py --input sample_account_summary.json
+python3 fraud_review_engine.py --input sample_account_summary.json --policy fraud_policy.json
 ```
 
 Optional (skip live URL fetch checks):
@@ -154,6 +159,46 @@ Environment variables for real integrations:
 - `ML_RISK_API_URL`, `ML_RISK_API_KEY` (or pass `--ml-model-path path/to/model.joblib`)
 
 If these are not configured, the engine does not crash; it marks external intelligence as partial and routes uncertainty appropriately.
+
+### Policy Configuration
+
+Tune thresholds in `fraud_policy.json` without changing code:
+
+- `ml_auto_approve_threshold`
+- `ml_auto_reject_threshold`
+- `clock_mismatch_minutes_threshold`
+- `reject_risk_threshold`
+- `approve_risk_threshold`
+- `approve_positive_signals_threshold`
+
+Use custom policy file:
+
+```bash
+python3 fraud_review_engine.py --input sample_account_summary.json --policy fraud_policy.json
+```
+
+### Batch Review Queue
+
+Process many accounts from `.json`, `.jsonl`, or `.csv` and generate a reviewer queue CSV:
+
+```bash
+python3 batch_review.py \
+	--input accounts.jsonl \
+	--output out/review_queue.csv \
+	--policy fraud_policy.json \
+	--no-web-checks
+```
+
+CSV input notes:
+
+- `item_urls`: separate multiple URLs with `|`
+- `ip_addresses`: separate multiple IPs with `|`
+
+### CI Automation
+
+QA alignment runs automatically on every push/PR via:
+
+- `.github/workflows/qa.yml`
 
 ### New Mandatory Guardrails
 

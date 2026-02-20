@@ -1,0 +1,8 @@
+{
+  "ml_auto_approve_threshold": 30,
+  "ml_auto_reject_threshold": 85,
+  "clock_mismatch_minutes_threshold": 60,
+  "reject_risk_threshold": 70,
+  "approve_risk_threshold": 25,
+  "approve_positive_signals_threshold": 4
+}

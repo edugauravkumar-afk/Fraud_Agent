@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 
 from advanced_external_checks import run_advanced_checks
 from afosint_integration import afosint_risk_points, normalize_ip_payload, run_comprehensive_check
+from policy_config import PolicyConfig, load_policy_config
 
 
 SHELL_ADDRESSES = {
@@ -216,10 +217,12 @@ def review_account(
     enable_registry: bool = False,
     enable_ml: bool = False,
     ml_model_path: str | None = None,
+    policy: PolicyConfig | None = None,
 ) -> dict[str, Any]:
+    policy = policy or PolicyConfig()
     verdict = "Route to Human VIP Sales"
 
-    if account.ml_score < 30:
+    if account.ml_score < policy.ml_auto_approve_threshold:
         return {
             "verdict": "Approve",
             "analysis": {
@@ -232,7 +235,7 @@ def review_account(
             "tags": ["APPROVE", "ML_LOW_RISK", "AUTO", "N/A"],
         }
 
-    if account.ml_score > 85:
+    if account.ml_score > policy.ml_auto_reject_threshold:
         return {
             "verdict": "Reject",
             "analysis": {
@@ -263,7 +266,7 @@ def review_account(
         and is_western_business_profile(account.company_name, account.address, email_domain)
     )
 
-    if clock_diff_minutes > 60:
+    if clock_diff_minutes > policy.clock_mismatch_minutes_threshold:
         risk_score += 30
         reasons.append("Local vs network clock difference is greater than 1 hour (mandatory proxy/location mismatch flag).")
 
@@ -454,10 +457,10 @@ def review_account(
 
     hard_reject = (not natural_offset_diff and not outsourced_exemption and shell_hit) or (parked_hits > 0 and bait_hits > 0)
 
-    if hard_reject or risk_score >= 70:
+    if hard_reject or risk_score >= policy.reject_risk_threshold:
         verdict = "Reject"
         status_tag = "REJECT"
-    elif risk_score <= 25 and positive_signals >= 4:
+    elif risk_score <= policy.approve_risk_threshold and positive_signals >= policy.approve_positive_signals_threshold:
         verdict = "Approve"
         status_tag = "APPROVE"
     else:
@@ -494,7 +497,7 @@ def review_account(
     timezone_geo = (
         f"Local Browser Time: {account.local_time}; Network IP Time: {account.network_time}. "
         f"Calculation: |clock delta|={clock_diff_minutes} min, |offset delta|={offset_diff_minutes} min. "
-        f"Rule check (>60 min clock mismatch)={'flagged' if clock_diff_minutes > 60 else 'clear'}. "
+        f"Rule check (>{policy.clock_mismatch_minutes_threshold} min clock mismatch)={'flagged' if clock_diff_minutes > policy.clock_mismatch_minutes_threshold else 'clear'}. "
         f"Natural offset delta={'yes' if natural_offset_diff else 'no'}; outsourced exemption={'yes' if outsourced_exemption else 'no'}."
     )
 
@@ -520,8 +523,10 @@ def review_account(
         approve_factors.append("no direct parked/bait-switch signal in checked URLs")
 
     reject_factors = []
-    if clock_diff_minutes > 60:
-        reject_factors.append("local vs network time mismatch exceeds 1 hour")
+    if clock_diff_minutes > policy.clock_mismatch_minutes_threshold:
+        reject_factors.append(
+            f"local vs network time mismatch exceeds {policy.clock_mismatch_minutes_threshold} minutes"
+        )
     if not natural_offset_diff and not outsourced_exemption:
         reject_factors.append("chaotic timezone offset suggests spoofing")
     if shell_hit and is_foreign_card:
@@ -706,6 +711,11 @@ def main() -> None:
         default=None,
         help="Path to a local serialized ML model (joblib) for risk scoring",
     )
+    parser.add_argument(
+        "--policy",
+        default="fraud_policy.json",
+        help="Path to policy config JSON",
+    )
     parser.add_argument("--json", action="store_true", help="Print raw JSON result")
     args = parser.parse_args()
 
@@ -713,6 +723,7 @@ def main() -> None:
         payload = json.load(handle)
 
     account = AccountSummary.from_dict(payload)
+    policy = load_policy_config(args.policy)
     result = review_account(
         account,
         enable_web_checks=not args.no_web_checks,
@@ -727,6 +738,7 @@ def main() -> None:
         enable_registry=args.enable_registry,
         enable_ml=args.enable_ml,
         ml_model_path=args.ml_model_path,
+        policy=policy,
     )
 
     if args.json:
