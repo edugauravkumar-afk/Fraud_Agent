@@ -9,6 +9,20 @@ Use the full operating prompt in:
 - `docs/FRAUD_REVIEW_AGENT_PROMPT.md`
 - `docs/QA_VALIDATION_MATRIX.md` (alignment test cases + expected outcomes)
 
+## One-Command QA Runner
+
+Run all alignment fixtures and print pass/fail:
+
+```bash
+./qa_run.sh
+```
+
+This validates expected verdict behavior for:
+
+- Midnight boundary time math
+- Missing URL mandatory hold
+- Outsourced enterprise exemption routing
+
 ## Intended Use
 
 - Paste the prompt into your review agent system message.
