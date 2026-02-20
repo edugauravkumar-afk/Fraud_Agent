@@ -104,6 +104,11 @@ python3 fraud_review_engine.py --input sample_account_summary.json --use-afosint
 - Adds structured checks for timezone/GEO, email trust, identity-payment linkage, and content-cloaking patterns.
 - Explicitly enforces false-positive exemptions (outsourced agencies, enterprise domains, family/corporate cards).
 - Produces consistent analyst-ready output for CRM logging and audits.
+- Adds a detailed Decision Summary explaining:
+	- why the account can be approved,
+	- why the account can be rejected,
+	- why the final verdict was selected,
+	- confidence score and confidence level.
 
 ### New Mandatory Guardrails
 

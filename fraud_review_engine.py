@@ -112,6 +112,10 @@ def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
 
 
+def clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
+
+
 def is_gibberish_domain(domain: str) -> bool:
     root = domain.split(".")[0]
     if len(root) < 7:
@@ -414,6 +418,25 @@ def review_account(
         verdict = "Route to Human VIP Sales"
         status_tag = "VIP_REVIEW"
 
+    confidence_score = int(
+        clamp(
+            55
+            + (positive_signals * 6)
+            - (risk_score * 0.45)
+            - (uncertainty_signals * 12)
+            - (10 if missing_urls else 0),
+            10,
+            95,
+        )
+    )
+
+    if confidence_score >= 75:
+        confidence_level = "High"
+    elif confidence_score >= 50:
+        confidence_level = "Medium"
+    else:
+        confidence_level = "Low"
+
     timezone_geo = (
         f"Local Browser Time: {account.local_time}; Network IP Time: {account.network_time}. "
         f"Calculation: |clock delta|={clock_diff_minutes} min, |offset delta|={offset_diff_minutes} min. "
@@ -430,6 +453,64 @@ def review_account(
         f"URL provided={'yes' if not missing_urls else 'no'}; URL checks: parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}. "
         f"Limitations: rate-limited={rate_limited_hits}, dynamic-content={dynamic_hits}, scraping-limited={scraping_limited_hits}. "
         f"{afosint_summary} Total risk score={risk_score}, positive signals={positive_signals}."
+    )
+
+    approve_factors = []
+    if last_name_match or card_company_match:
+        approve_factors.append("identity and payment owner are logically linked")
+    if not shell_hit:
+        approve_factors.append("address does not match known shell-address patterns")
+    if natural_offset_diff or outsourced_exemption:
+        approve_factors.append("timezone profile has a legitimate interpretation")
+    if parked_hits == 0 and bait_hits == 0:
+        approve_factors.append("no direct parked/bait-switch signal in checked URLs")
+
+    reject_factors = []
+    if clock_diff_minutes > 60:
+        reject_factors.append("local vs network time mismatch exceeds 1 hour")
+    if not natural_offset_diff and not outsourced_exemption:
+        reject_factors.append("chaotic timezone offset suggests spoofing")
+    if shell_hit and is_foreign_card:
+        reject_factors.append("known shell address combined with foreign card profile")
+    if parked_hits > 0:
+        reject_factors.append("parked-domain behavior detected")
+    if bait_hits > 0:
+        reject_factors.append("bait-and-switch redirect behavior detected")
+    if missing_urls:
+        reject_factors.append("item URL missing so compliance destination cannot be verified")
+
+    approve_side = (
+        "; ".join(approve_factors[:4])
+        if approve_factors
+        else "no strong positive trust signals were found"
+    )
+    reject_side = (
+        "; ".join(reject_factors[:4])
+        if reject_factors
+        else "no hard-fraud signal was strong enough on its own"
+    )
+
+    if verdict == "Approve":
+        final_reason = (
+            "Approved because positive identity/GEO/content signals outweighed risk indicators, "
+            "and no mandatory hold/reject gate was triggered."
+        )
+    elif verdict == "Reject":
+        final_reason = (
+            "Rejected because independent fraud indicators converged strongly enough to pass rejection thresholds."
+        )
+    elif verdict == "Conditional Approval - Hold for URL Verification":
+        final_reason = (
+            "Conditionally approved on identity/business coherence, but held because URL verification is mandatory before full approval."
+        )
+    else:
+        final_reason = (
+            "Routed to Human VIP Sales because mixed signals or OSINT uncertainty require senior manual judgment."
+        )
+
+    confidence_statement = (
+        f"{confidence_level} confidence ({confidence_score}/100): based on risk score, positive corroboration, "
+        f"and uncertainty penalties from data quality limitations."
     )
 
     false_positive = (
@@ -466,6 +547,14 @@ def review_account(
             "domain_policy": domain_policy,
         },
         "false_positive": false_positive,
+        "decision_summary": {
+            "approve_case": approve_side,
+            "reject_case": reject_side,
+            "final_reason": final_reason,
+            "confidence": confidence_statement,
+            "confidence_score": confidence_score,
+            "confidence_level": confidence_level,
+        },
         "internal_note": internal_note,
         "tags": tags,
         "debug": {
@@ -497,6 +586,19 @@ def format_report(result: dict[str, Any]) -> str:
             "",
             "### False Positive Check:",
             result["false_positive"],
+            "",
+            "### Decision Summary:",
+            "**Why this can be approved:**",
+            result["decision_summary"]["approve_case"],
+            "",
+            "**Why this can be rejected:**",
+            result["decision_summary"]["reject_case"],
+            "",
+            "**Why final verdict was chosen:**",
+            result["decision_summary"]["final_reason"],
+            "",
+            "**Confidence Statement:**",
+            result["decision_summary"]["confidence"],
             "",
             "### Internal Note Summary:",
             result["internal_note"],
