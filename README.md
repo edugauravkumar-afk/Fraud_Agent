@@ -110,6 +110,36 @@ python3 fraud_review_engine.py --input sample_account_summary.json --use-afosint
 	- why the final verdict was selected,
 	- confidence score and confidence level.
 
+### Advanced Fraud-Specific Checks (Optional)
+
+You can enable real external checks individually:
+
+- ScamAdviser API integration
+- LinkedIn API professional verification
+- SSL certificate validation
+- Social media presence checking
+- Business registry lookup (OpenCorporates)
+- Machine-learning risk scoring (API or local joblib model)
+
+Run all advanced checks:
+
+```bash
+python3 fraud_review_engine.py \
+	--input sample_account_summary.json \
+	--use-advanced-checks \
+	--enable-scamadviser --enable-linkedin --enable-ssl --enable-social --enable-registry --enable-ml \
+	--json
+```
+
+Environment variables for real integrations:
+
+- `SCAMADVISER_API_URL`, `SCAMADVISER_API_KEY` (optional: `SCAMADVISER_URL_PARAM`)
+- `LINKEDIN_API_URL`, `LINKEDIN_ACCESS_TOKEN`
+- `OPENCORPORATES_API_TOKEN` (optional for higher limits)
+- `ML_RISK_API_URL`, `ML_RISK_API_KEY` (or pass `--ml-model-path path/to/model.joblib`)
+
+If these are not configured, the engine does not crash; it marks external intelligence as partial and routes uncertainty appropriately.
+
 ### New Mandatory Guardrails
 
 - Strict time extraction: report Local Browser Time, Network IP Time, and exact math difference.

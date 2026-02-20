@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from advanced_external_checks import run_advanced_checks
 from afosint_integration import afosint_risk_points, normalize_ip_payload, run_comprehensive_check
 
 
@@ -206,6 +207,14 @@ def review_account(
     use_afosint: bool = False,
     afosint_web_searches: bool = False,
     afosint_mock_mode: bool = False,
+    use_advanced_checks: bool = False,
+    enable_scamadviser: bool = False,
+    enable_linkedin: bool = False,
+    enable_ssl: bool = False,
+    enable_social: bool = False,
+    enable_registry: bool = False,
+    enable_ml: bool = False,
+    ml_model_path: str | None = None,
 ) -> dict[str, Any]:
     verdict = "Route to Human VIP Sales"
 
@@ -351,6 +360,50 @@ def review_account(
         uncertainty_signals += 1
         reasons.append("Website structure yielded low extractable content; scraping evidence is partial.")
 
+    advanced_summary = "Advanced external checks not requested."
+    advanced_debug: dict[str, Any] = {
+        "enabled": use_advanced_checks,
+        "risk_points_applied": 0,
+        "uncertainty_signals": 0,
+        "tags": [],
+        "details": {},
+    }
+    advanced_tags: list[str] = []
+    if use_advanced_checks:
+        advanced_result = run_advanced_checks(
+            account_owner=account.name,
+            company_name=account.company_name,
+            email=account.email,
+            urls=account.item_urls,
+            base_risk_signals={
+                "clock_diff_minutes": clock_diff_minutes,
+                "offset_diff_minutes": offset_diff_minutes,
+                "base_risk_score": risk_score,
+                "positive_signals": positive_signals,
+            },
+            enable_scamadviser=enable_scamadviser,
+            enable_linkedin=enable_linkedin,
+            enable_ssl=enable_ssl,
+            enable_social=enable_social,
+            enable_registry=enable_registry,
+            enable_ml=enable_ml,
+            ml_model_path=ml_model_path,
+        )
+        risk_score += int(advanced_result.get("risk_points", 0))
+        uncertainty_signals += int(advanced_result.get("uncertainty_signals", 0))
+        advanced_notes = advanced_result.get("notes", []) or []
+        reasons.extend([str(note) for note in advanced_notes])
+        advanced_tags = [str(tag) for tag in (advanced_result.get("tags", []) or [])]
+
+        advanced_debug["risk_points_applied"] = int(advanced_result.get("risk_points", 0))
+        advanced_debug["uncertainty_signals"] = int(advanced_result.get("uncertainty_signals", 0))
+        advanced_debug["tags"] = advanced_tags
+        advanced_debug["details"] = advanced_result.get("debug", {}) or {}
+        advanced_summary = (
+            f"Advanced checks integrated: +{advanced_debug['risk_points_applied']} risk points, "
+            f"+{advanced_debug['uncertainty_signals']} uncertainty signals."
+        )
+
     if parked_hits == 0 and safe_page_hits == 0 and bait_hits == 0 and account.item_urls:
         positive_signals += 1
         reasons.append("No cloaking or parked-domain indicators in sampled URLs.")
@@ -452,7 +505,7 @@ def review_account(
     domain_policy = (
         f"URL provided={'yes' if not missing_urls else 'no'}; URL checks: parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}. "
         f"Limitations: rate-limited={rate_limited_hits}, dynamic-content={dynamic_hits}, scraping-limited={scraping_limited_hits}. "
-        f"{afosint_summary} Total risk score={risk_score}, positive signals={positive_signals}."
+        f"{afosint_summary} {advanced_summary} Total risk score={risk_score}, positive signals={positive_signals}."
     )
 
     approve_factors = []
@@ -538,6 +591,9 @@ def review_account(
     for af_tag in afosint_extra_tags:
         if af_tag not in tags:
             tags.append(af_tag)
+    for advanced_tag in advanced_tags:
+        if advanced_tag not in tags:
+            tags.append(advanced_tag)
 
     return {
         "verdict": verdict,
@@ -564,6 +620,7 @@ def review_account(
             "reasons": reasons,
             "url_findings": url_findings,
             "afosint": afosint_debug,
+            "advanced_checks": advanced_debug,
         },
     }
 
@@ -632,6 +689,22 @@ def main() -> None:
         action="store_true",
         help="Run AFOSINT in mock mode for local testing",
     )
+    parser.add_argument(
+        "--use-advanced-checks",
+        action="store_true",
+        help="Enable advanced external checks (ScamAdviser, LinkedIn, SSL, social, registry, ML)",
+    )
+    parser.add_argument("--enable-scamadviser", action="store_true", help="Enable ScamAdviser API check")
+    parser.add_argument("--enable-linkedin", action="store_true", help="Enable LinkedIn professional verification")
+    parser.add_argument("--enable-ssl", action="store_true", help="Enable SSL certificate validation")
+    parser.add_argument("--enable-social", action="store_true", help="Enable social media presence check")
+    parser.add_argument("--enable-registry", action="store_true", help="Enable business registry lookup")
+    parser.add_argument("--enable-ml", action="store_true", help="Enable external/local ML risk scoring")
+    parser.add_argument(
+        "--ml-model-path",
+        default=None,
+        help="Path to a local serialized ML model (joblib) for risk scoring",
+    )
     parser.add_argument("--json", action="store_true", help="Print raw JSON result")
     args = parser.parse_args()
 
@@ -645,6 +718,14 @@ def main() -> None:
         use_afosint=args.use_afosint,
         afosint_web_searches=args.afosint_web_searches,
         afosint_mock_mode=args.afosint_mock_mode,
+        use_advanced_checks=args.use_advanced_checks,
+        enable_scamadviser=args.enable_scamadviser,
+        enable_linkedin=args.enable_linkedin,
+        enable_ssl=args.enable_ssl,
+        enable_social=args.enable_social,
+        enable_registry=args.enable_registry,
+        enable_ml=args.enable_ml,
+        ml_model_path=args.ml_model_path,
     )
 
     if args.json:

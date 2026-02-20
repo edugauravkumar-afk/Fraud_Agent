@@ -1,2 +1,3 @@
 afosint-toolkit
 python-whois
+joblib
