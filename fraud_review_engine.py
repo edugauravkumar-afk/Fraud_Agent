@@ -101,7 +101,8 @@ def timezone_offset_minutes(dt: datetime) -> int:
 def clock_time_difference_minutes(local_dt: datetime, network_dt: datetime) -> int:
     local_minutes = local_dt.hour * 60 + local_dt.minute
     network_minutes = network_dt.hour * 60 + network_dt.minute
-    return abs(local_minutes - network_minutes)
+    diff = abs(local_minutes - network_minutes)
+    return min(diff, 1440 - diff)
 
 
 def last_name(full_name: str) -> str:

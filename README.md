@@ -79,7 +79,7 @@ Dependency coverage:
 - `beautifulsoup4` (HTML parsing) -> in `requirements.txt`
 - `python-whois` (WHOIS lookups) -> in `requirements-optional.txt`
 - `ipaddress` (IP validation) -> Python standard library (no pip install needed)
-- Python `3.6+` supported by dependency set
+- Python `3.10+` required (uses modern type-hint syntax)
 
 Run with AFOSINT comprehensive check enabled:
 
