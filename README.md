@@ -34,8 +34,10 @@ This repo now includes a Python decision engine for the critical manual-review r
 ### Files
 
 - `fraud_review_engine.py` - main decision engine + strict report formatter
+- `afosint_integration.py` - optional AFOSINT adapter with graceful fallback
 - `sample_account_summary.json` - sample account payload
 - `requirements.txt` - required Python packages
+- `requirements-optional.txt` - optional AFOSINT package list
 
 ### Setup
 
@@ -61,6 +63,32 @@ Raw JSON output:
 
 ```bash
 python3 fraud_review_engine.py --input sample_account_summary.json --json
+```
+
+### AFOSINT Integration (Optional)
+
+Install optional package(s):
+
+```bash
+python -m pip install -r requirements-optional.txt
+```
+
+Run with AFOSINT comprehensive check enabled:
+
+```bash
+python3 fraud_review_engine.py --input sample_account_summary.json --use-afosint --json
+```
+
+Enable AFOSINT web searches (deeper checks, slower):
+
+```bash
+python3 fraud_review_engine.py --input sample_account_summary.json --use-afosint --afosint-web-searches
+```
+
+Run AFOSINT in mock mode for tests:
+
+```bash
+python3 fraud_review_engine.py --input sample_account_summary.json --use-afosint --afosint-mock-mode
 ```
 
 ### Why this helps

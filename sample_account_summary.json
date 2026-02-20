@@ -9,6 +9,12 @@
   "local_time": "2026-02-20T10:30:00-08:00",
   "network_time": "2026-02-20T23:00:00+05:30",
   "network_country": "India",
+  "ip_addresses": [
+    {
+      "ip": "198.143.15.136",
+      "country": "United States"
+    }
+  ],
   "email_first_seen": "1970-01-01",
   "email_invalid_flag": true,
   "item_urls": [

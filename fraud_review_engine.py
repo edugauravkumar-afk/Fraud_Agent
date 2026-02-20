@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from afosint_integration import afosint_risk_points, normalize_ip_payload, run_comprehensive_check
+
 
 SHELL_ADDRESSES = {
     "1603 capitol ave, cheyenne, wy",
@@ -61,6 +63,7 @@ class AccountSummary:
     local_time: str
     network_time: str
     item_urls: list[str] = field(default_factory=list)
+    ip_addresses: list[dict[str, str]] = field(default_factory=list)
     email_first_seen: str | None = None
     email_invalid_flag: bool = False
     network_country: str | None = None
@@ -78,6 +81,7 @@ class AccountSummary:
             local_time=data.get("local_time", "").strip(),
             network_time=data.get("network_time", "").strip(),
             item_urls=data.get("item_urls", []) or [],
+            ip_addresses=data.get("ip_addresses", []) or [],
             email_first_seen=data.get("email_first_seen"),
             email_invalid_flag=bool(data.get("email_invalid_flag", False)),
             network_country=data.get("network_country"),
@@ -175,7 +179,13 @@ def inspect_url(url: str, timeout: int = 6) -> dict[str, Any]:
     return result
 
 
-def review_account(account: AccountSummary, enable_web_checks: bool = True) -> dict[str, Any]:
+def review_account(
+    account: AccountSummary,
+    enable_web_checks: bool = True,
+    use_afosint: bool = False,
+    afosint_web_searches: bool = False,
+    afosint_mock_mode: bool = False,
+) -> dict[str, Any]:
     verdict = "Route to Human VIP Sales"
 
     if account.ml_score < 30:
@@ -310,6 +320,42 @@ def review_account(account: AccountSummary, enable_web_checks: bool = True) -> d
         positive_signals += 1
         reasons.append("No cloaking or parked-domain indicators in sampled URLs.")
 
+    afosint_summary = "AFOSINT not requested."
+    afosint_debug: dict[str, Any] = {
+        "enabled": False,
+        "available": None,
+        "error": None,
+        "result": None,
+        "risk_points_applied": 0,
+        "tags": [],
+    }
+    afosint_extra_tags: list[str] = []
+    if use_afosint:
+        ip_payload = normalize_ip_payload(account.ip_addresses, fallback_country=account.network_country)
+        afosint_check = run_comprehensive_check(
+            account_owner=account.name,
+            cc_holder=account.cc_owner,
+            company_name=account.company_name,
+            email=account.email,
+            urls=account.item_urls,
+            ip_addresses=ip_payload,
+            perform_web_searches=afosint_web_searches,
+            mock_mode=afosint_mock_mode,
+        )
+        afosint_debug.update(afosint_check)
+
+        if afosint_check.get("result"):
+            af_points, af_notes, afosint_extra_tags = afosint_risk_points(afosint_check["result"])
+            risk_score += af_points
+            reasons.extend(af_notes)
+            afosint_debug["risk_points_applied"] = af_points
+            afosint_debug["tags"] = afosint_extra_tags
+            afosint_summary = f"AFOSINT integrated: +{af_points} risk points."
+        elif afosint_check.get("error"):
+            afosint_summary = f"AFOSINT requested but unavailable/failed: {afosint_check['error']}."
+        else:
+            afosint_summary = "AFOSINT requested but no result returned."
+
     missing_urls = len(account.item_urls) == 0
     if missing_urls:
         reasons.append("Item URL is missing; account cannot be fully approved before landing-page verification.")
@@ -344,7 +390,7 @@ def review_account(account: AccountSummary, enable_web_checks: bool = True) -> d
 
     domain_policy = (
         f"URL provided={'yes' if not missing_urls else 'no'}; URL checks: parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}. "
-        f"Total risk score={risk_score}, positive signals={positive_signals}."
+        f"{afosint_summary} Total risk score={risk_score}, positive signals={positive_signals}."
     )
 
     false_positive = (
@@ -366,6 +412,11 @@ def review_account(account: AccountSummary, enable_web_checks: bool = True) -> d
     if missing_urls:
         content = "URL_MISSING"
 
+    tags = [status_tag, risk_type, location, content]
+    for af_tag in afosint_extra_tags:
+        if af_tag not in tags:
+            tags.append(af_tag)
+
     return {
         "verdict": verdict,
         "analysis": {
@@ -375,12 +426,13 @@ def review_account(account: AccountSummary, enable_web_checks: bool = True) -> d
         },
         "false_positive": false_positive,
         "internal_note": internal_note,
-        "tags": [status_tag, risk_type, location, content],
+        "tags": tags,
         "debug": {
             "risk_score": risk_score,
             "positive_signals": positive_signals,
             "reasons": reasons,
             "url_findings": url_findings,
+            "afosint": afosint_debug,
         },
     }
 
@@ -421,6 +473,21 @@ def main() -> None:
         action="store_true",
         help="Disable live URL inspection if network access is restricted",
     )
+    parser.add_argument(
+        "--use-afosint",
+        action="store_true",
+        help="Run AFOSINT comprehensive fraud check and blend result into manual-band scoring",
+    )
+    parser.add_argument(
+        "--afosint-web-searches",
+        action="store_true",
+        help="Allow AFOSINT to perform web searches (slower, better intelligence)",
+    )
+    parser.add_argument(
+        "--afosint-mock-mode",
+        action="store_true",
+        help="Run AFOSINT in mock mode for local testing",
+    )
     parser.add_argument("--json", action="store_true", help="Print raw JSON result")
     args = parser.parse_args()
 
@@ -428,7 +495,13 @@ def main() -> None:
         payload = json.load(handle)
 
     account = AccountSummary.from_dict(payload)
-    result = review_account(account, enable_web_checks=not args.no_web_checks)
+    result = review_account(
+        account,
+        enable_web_checks=not args.no_web_checks,
+        use_afosint=args.use_afosint,
+        afosint_web_searches=args.afosint_web_searches,
+        afosint_mock_mode=args.afosint_mock_mode,
+    )
 
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
