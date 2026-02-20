@@ -1,0 +1,23 @@
+{
+  "name": "Alex Morgan",
+  "email": "alex.morgan@northstarads.com",
+  "ml_score": 62,
+  "company_name": "Northstar Ads LLC",
+  "cc_owner": "Northstar Ads LLC",
+  "cc_country": "United States",
+  "address": "120 Market St, San Francisco, CA, United States",
+  "local_time": "2026-02-20T10:30:00-08:00",
+  "network_time": "2026-02-20T23:00:00+05:30",
+  "network_country": "India",
+  "email_first_seen": "1970-01-01",
+  "email_invalid_flag": true,
+  "item_urls": [
+    "https://example.com"
+  ],
+  "ip_addresses": [
+    {
+      "ip": "198.143.15.136",
+      "country": "United States"
+    }
+  ]
+}

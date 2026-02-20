@@ -1,0 +1,23 @@
+{
+  "name": "Mia Thompson",
+  "email": "mia@northshoremedia.co",
+  "ml_score": 58,
+  "company_name": "Northshore Media LLC",
+  "cc_owner": "Northshore Media LLC",
+  "cc_country": "United States",
+  "address": "221 Pine St, Seattle, WA, United States",
+  "local_time": "2026-02-20T23:50:00-08:00",
+  "network_time": "2026-02-21T00:10:00-08:00",
+  "network_country": "United States",
+  "email_first_seen": "2022-05-15",
+  "email_invalid_flag": false,
+  "item_urls": [
+    "https://example.com"
+  ],
+  "ip_addresses": [
+    {
+      "ip": "93.184.216.34",
+      "country": "United States"
+    }
+  ]
+}

@@ -7,6 +7,7 @@ Revenue protection prompt and workflow for ad network compliance review.
 Use the full operating prompt in:
 
 - `docs/FRAUD_REVIEW_AGENT_PROMPT.md`
+- `docs/QA_VALIDATION_MATRIX.md` (alignment test cases + expected outcomes)
 
 ## Intended Use
 
