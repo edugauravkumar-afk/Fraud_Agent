@@ -68,3 +68,10 @@ python3 fraud_review_engine.py --input sample_account_summary.json --json
 - Adds structured checks for timezone/GEO, email trust, identity-payment linkage, and content-cloaking patterns.
 - Explicitly enforces false-positive exemptions (outsourced agencies, enterprise domains, family/corporate cards).
 - Produces consistent analyst-ready output for CRM logging and audits.
+
+### New Mandatory Guardrails
+
+- Strict time extraction: report Local Browser Time, Network IP Time, and exact math difference.
+- If local vs network clock difference is greater than 1 hour, force location/proxy mismatch flag.
+- If Item URL is missing, approval is blocked and verdict becomes:
+	- `Conditional Approval - Hold for URL Verification`

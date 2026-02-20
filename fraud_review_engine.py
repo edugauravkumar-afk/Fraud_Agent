@@ -93,6 +93,12 @@ def timezone_offset_minutes(dt: datetime) -> int:
     return int(tz.total_seconds() // 60) if tz else 0
 
 
+def clock_time_difference_minutes(local_dt: datetime, network_dt: datetime) -> int:
+    local_minutes = local_dt.hour * 60 + local_dt.minute
+    network_minutes = network_dt.hour * 60 + network_dt.minute
+    return abs(local_minutes - network_minutes)
+
+
 def last_name(full_name: str) -> str:
     tokens = [token for token in re.split(r"\s+", full_name.strip()) if token]
     return tokens[-1].lower() if tokens else ""
@@ -206,16 +212,21 @@ def review_account(account: AccountSummary, enable_web_checks: bool = True) -> d
     network_dt = parse_iso_with_tz(account.network_time)
     local_offset = timezone_offset_minutes(local_dt)
     network_offset = timezone_offset_minutes(network_dt)
-    diff_minutes = abs(local_offset - network_offset)
+    offset_diff_minutes = abs(local_offset - network_offset)
+    clock_diff_minutes = clock_time_difference_minutes(local_dt, network_dt)
 
     email_domain = account.email.split("@")[-1] if "@" in account.email else ""
-    natural_diff = diff_minutes % 30 == 0
+    natural_offset_diff = offset_diff_minutes % 30 == 0
     outsourced_exemption = (
         network_offset in OUTSOURCED_NETWORK_OFFSETS_MINUTES
         and is_western_business_profile(account.company_name, account.address, email_domain)
     )
 
-    if not natural_diff and not outsourced_exemption:
+    if clock_diff_minutes > 60:
+        risk_score += 30
+        reasons.append("Local vs network clock difference is greater than 1 hour (mandatory proxy/location mismatch flag).")
+
+    if not natural_offset_diff and not outsourced_exemption:
         risk_score += 35
         reasons.append("Chaotic timezone delta suggests anti-detect manipulation.")
     elif outsourced_exemption:
@@ -299,7 +310,11 @@ def review_account(account: AccountSummary, enable_web_checks: bool = True) -> d
         positive_signals += 1
         reasons.append("No cloaking or parked-domain indicators in sampled URLs.")
 
-    hard_reject = (not natural_diff and not outsourced_exemption and shell_hit) or (parked_hits > 0 and bait_hits > 0)
+    missing_urls = len(account.item_urls) == 0
+    if missing_urls:
+        reasons.append("Item URL is missing; account cannot be fully approved before landing-page verification.")
+
+    hard_reject = (not natural_offset_diff and not outsourced_exemption and shell_hit) or (parked_hits > 0 and bait_hits > 0)
 
     if hard_reject or risk_score >= 70:
         verdict = "Reject"
@@ -311,9 +326,15 @@ def review_account(account: AccountSummary, enable_web_checks: bool = True) -> d
         verdict = "Route to Human VIP Sales"
         status_tag = "VIP_REVIEW"
 
+    if missing_urls and verdict != "Reject":
+        verdict = "Conditional Approval - Hold for URL Verification"
+        status_tag = "HOLD_URL_VERIFICATION"
+
     timezone_geo = (
-        f"Local offset={local_offset} min, network offset={network_offset} min, delta={diff_minutes} min. "
-        f"Natural delta={'yes' if natural_diff else 'no'}; outsourced exemption={'yes' if outsourced_exemption else 'no'}."
+        f"Local Browser Time: {account.local_time}; Network IP Time: {account.network_time}. "
+        f"Calculation: |clock delta|={clock_diff_minutes} min, |offset delta|={offset_diff_minutes} min. "
+        f"Rule check (>60 min clock mismatch)={'flagged' if clock_diff_minutes > 60 else 'clear'}. "
+        f"Natural offset delta={'yes' if natural_offset_diff else 'no'}; outsourced exemption={'yes' if outsourced_exemption else 'no'}."
     )
 
     identity_payment = (
@@ -322,7 +343,7 @@ def review_account(account: AccountSummary, enable_web_checks: bool = True) -> d
     )
 
     domain_policy = (
-        f"URL checks: parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}. "
+        f"URL provided={'yes' if not missing_urls else 'no'}; URL checks: parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}. "
         f"Total risk score={risk_score}, positive signals={positive_signals}."
     )
 
@@ -342,6 +363,8 @@ def review_account(account: AccountSummary, enable_web_checks: bool = True) -> d
     risk_type = "MULTI_SIGNAL" if risk_score >= 40 else "LOW_SIGNAL"
     location = account.network_country or "UNKNOWN"
     content = "CLOAKING_RISK" if (parked_hits or bait_hits or safe_page_hits) else "CLEAN_CONTENT"
+    if missing_urls:
+        content = "URL_MISSING"
 
     return {
         "verdict": verdict,
