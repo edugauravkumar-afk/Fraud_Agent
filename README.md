@@ -54,6 +54,8 @@ This repo now includes a Python decision engine for the critical manual-review r
 - `policy_config.py` - policy thresholds loader
 - `fraud_policy.json` - default policy thresholds
 - `batch_review.py` - batch queue generator for multi-account review
+- `self_learning.py` - self-learning feature extraction, inference, and training helpers
+- `self_learning_pipeline.py` - feedback append + model training CLI
 - `.env.example` - external API configuration template
 - `sample_account_summary.json` - sample account payload
 - `requirements.txt` - required Python packages
@@ -193,6 +195,42 @@ CSV input notes:
 
 - `item_urls`: separate multiple URLs with `|`
 - `ip_addresses`: separate multiple IPs with `|`
+
+### Self-Learning Decision Model (Human Feedback Loop)
+
+The agent supports controlled self-learning from reviewed outcomes:
+
+1) Append reviewed outcomes to feedback store:
+
+```bash
+python3 self_learning_pipeline.py add-feedback \
+	--account sample_account_summary.json \
+	--final-verdict "Route to Human VIP Sales" \
+	--feedback-data data/review_feedback.jsonl
+```
+
+2) Train/retrain model from feedback:
+
+```bash
+python3 self_learning_pipeline.py train \
+	--feedback-data data/review_feedback.jsonl \
+	--model-path models/self_learning_model.joblib
+```
+
+3) Use model during review (conservative risk adjustment):
+
+```bash
+python3 fraud_review_engine.py \
+	--input sample_account_summary.json \
+	--use-self-learning \
+	--self-learning-model-path models/self_learning_model.joblib \
+	--json
+```
+
+Safety design:
+
+- Hard guardrails (URL missing hold, shell/geo rules, thresholds) remain active.
+- Self-learning only adjusts risk score conservatively; it does not bypass mandatory checks.
 
 ### CI Automation
 

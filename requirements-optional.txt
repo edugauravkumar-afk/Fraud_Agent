@@ -1,3 +1,4 @@
 afosint-toolkit
 python-whois
 joblib
+scikit-learn

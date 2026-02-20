@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from advanced_external_checks import run_advanced_checks
 from afosint_integration import afosint_risk_points, normalize_ip_payload, run_comprehensive_check
 from policy_config import PolicyConfig, load_policy_config
+from self_learning import build_feature_dict, predict_reject_probability
 
 
 SHELL_ADDRESSES = {
@@ -217,6 +218,8 @@ def review_account(
     enable_registry: bool = False,
     enable_ml: bool = False,
     ml_model_path: str | None = None,
+    use_self_learning: bool = False,
+    self_learning_model_path: str = "models/self_learning_model.joblib",
     policy: PolicyConfig | None = None,
 ) -> dict[str, Any]:
     policy = policy or PolicyConfig()
@@ -364,6 +367,59 @@ def review_account(
         uncertainty_signals += 1
         reasons.append("Website structure yielded low extractable content; scraping evidence is partial.")
 
+    learning_summary = "Self-learning model not requested."
+    learning_debug: dict[str, Any] = {
+        "enabled": use_self_learning,
+        "model_path": self_learning_model_path,
+        "available": False,
+        "reject_probability": None,
+        "risk_points_applied": 0,
+        "error": None,
+    }
+    if use_self_learning:
+        learning_features = build_feature_dict(
+            {
+                "email": account.email,
+                "ml_score": account.ml_score,
+                "item_urls": account.item_urls,
+            },
+            {
+                "clock_diff_minutes": clock_diff_minutes,
+                "offset_diff_minutes": offset_diff_minutes,
+                "risk_score": risk_score,
+                "positive_signals": positive_signals,
+                "uncertainty_signals": uncertainty_signals,
+            },
+        )
+        learning_result = predict_reject_probability(self_learning_model_path, learning_features)
+        learning_debug["available"] = bool(learning_result.get("available"))
+        learning_debug["reject_probability"] = learning_result.get("reject_probability")
+        learning_debug["error"] = learning_result.get("error")
+
+        reject_probability = learning_result.get("reject_probability")
+        if isinstance(reject_probability, float):
+            if reject_probability >= 0.85:
+                risk_score += 20
+                learning_debug["risk_points_applied"] = 20
+            elif reject_probability >= 0.65:
+                risk_score += 10
+                learning_debug["risk_points_applied"] = 10
+            elif reject_probability <= 0.20:
+                risk_score -= 5
+                learning_debug["risk_points_applied"] = -5
+
+            reasons.append(
+                f"Self-learning reject probability={reject_probability:.2f}; risk adjustment={learning_debug['risk_points_applied']}."
+            )
+            learning_summary = (
+                f"Self-learning integrated: reject-prob={reject_probability:.2f}, "
+                f"risk adjustment={learning_debug['risk_points_applied']}."
+            )
+        else:
+            uncertainty_signals += 1
+            reasons.append("Self-learning model unavailable; treated as uncertainty signal.")
+            learning_summary = f"Self-learning unavailable: {learning_result.get('error')}"
+
     advanced_summary = "Advanced external checks not requested."
     advanced_debug: dict[str, Any] = {
         "enabled": use_advanced_checks,
@@ -509,7 +565,7 @@ def review_account(
     domain_policy = (
         f"URL provided={'yes' if not missing_urls else 'no'}; URL checks: parked={parked_hits}, safe-template={safe_page_hits}, bait-switch={bait_hits}. "
         f"Limitations: rate-limited={rate_limited_hits}, dynamic-content={dynamic_hits}, scraping-limited={scraping_limited_hits}. "
-        f"{afosint_summary} {advanced_summary} Total risk score={risk_score}, positive signals={positive_signals}."
+        f"{afosint_summary} {advanced_summary} {learning_summary} Total risk score={risk_score}, positive signals={positive_signals}."
     )
 
     approve_factors = []
@@ -627,6 +683,7 @@ def review_account(
             "url_findings": url_findings,
             "afosint": afosint_debug,
             "advanced_checks": advanced_debug,
+            "self_learning": learning_debug,
         },
     }
 
@@ -712,6 +769,16 @@ def main() -> None:
         help="Path to a local serialized ML model (joblib) for risk scoring",
     )
     parser.add_argument(
+        "--use-self-learning",
+        action="store_true",
+        help="Use trained self-learning model to adjust risk score conservatively",
+    )
+    parser.add_argument(
+        "--self-learning-model-path",
+        default="models/self_learning_model.joblib",
+        help="Path to self-learning model artifact",
+    )
+    parser.add_argument(
         "--policy",
         default="fraud_policy.json",
         help="Path to policy config JSON",
@@ -738,6 +805,8 @@ def main() -> None:
         enable_registry=args.enable_registry,
         enable_ml=args.enable_ml,
         ml_model_path=args.ml_model_path,
+        use_self_learning=args.use_self_learning,
+        self_learning_model_path=args.self_learning_model_path,
         policy=policy,
     )
 
